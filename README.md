@@ -88,7 +88,7 @@ scripts/steam-test-qimenu
 
 This downloads `qiMenu 0.2.91` into a temporary mod directory, creates a throwaway save, temporarily points Steam's Factorio app path at a temporary patched app, and restores the original app path and Steam remote achievement files afterward.
 
-The helper achievement used by this test is intentionally custom and non-Steam, so it should not be interpreted as a real Steam unlock. The test proves that Steam relaunches the patched app, `qiMenu` is active, a local player exists in the modded save, and Factorio's achievement API succeeds under that patched runtime.
+The helper achievement used by this test is intentionally custom and non-Steam, so it should not be interpreted as a real Steam unlock. The test also calls the already-present vanilla achievement `so-long-and-thanks-for-all-the-fish`, which avoids creating a new permanent Steam unlock. The test proves that Steam relaunches the patched app, `qiMenu` is active, a local player exists in the modded save, and Factorio's achievement API succeeds under that patched runtime.
 
 ## Why Not `DYLD_INSERT_LIBRARIES`?
 
@@ -116,6 +116,6 @@ The automated tests prove:
 - the normal save ZIP files are not changed by verification;
 - a throwaway modded save can be created under `/tmp`;
 - all expected original bytes and patched replacement bytes are present at the known ARM64 offsets.
-- a Steam-backed graphical test with `qiMenu 0.2.91` loaded a modded save through the patched app, created a local player, and successfully called Factorio's achievement API.
+- a Steam-backed graphical test with `qiMenu 0.2.91` loaded a modded save through the patched app, created a local player, and successfully called Factorio's achievement API for both a custom test achievement and the already-present vanilla `so-long-and-thanks-for-all-the-fish` achievement.
 
 They intentionally do not force-unlock a new real Steam achievement, because that would permanently affect the user's Steam account. The patch scope covers the modded-save gates in the supported Factorio binary; it cannot prove every possible third-party mod behaves correctly, only that the achievement gate no longer depends on whether mods are active.

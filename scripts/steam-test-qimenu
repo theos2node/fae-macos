@@ -15,6 +15,7 @@ CONFIG="${WORK_DIR}/config.ini"
 SAVE="${WRITE_DATA}/saves/fae-qimenu-steam.zip"
 REMOTE_BACKUP="${WORK_DIR}/remote-backup"
 ACH="fae-qimenu-steam-test-$(date +%s)"
+VANILLA_ACH="so-long-and-thanks-for-all-the-fish"
 RESTORE_LOG="${WORK_DIR}/restore.log"
 
 restore() {
@@ -108,9 +109,11 @@ script.on_event(defines.events.on_tick, function(event)
   if storage.did_unlock or event.tick > 600 then return end
   if event.tick % 60 == 0 then record("on_tick=" .. tostring(event.tick) .. " players=" .. tostring(#game.players)) end
   if game.players[1] then
-    local ok, err = pcall(function() game.players[1].unlock_achievement("$ACH") end)
+    local custom_ok, custom_err = pcall(function() game.players[1].unlock_achievement("$ACH") end)
+    local vanilla_ok, vanilla_err = pcall(function() game.players[1].unlock_achievement("$VANILLA_ACH") end)
     storage.did_unlock = true
-    record("custom_unlock=" .. tostring(ok) .. " err=" .. tostring(err))
+    record("custom_unlock=" .. tostring(custom_ok) .. " err=" .. tostring(custom_err))
+    record("vanilla_unlock=$VANILLA_ACH ok=" .. tostring(vanilla_ok) .. " err=" .. tostring(vanilla_err))
   end
 end)
 EOF_CTRL
@@ -143,6 +146,7 @@ restore
 trap - EXIT
 
 echo "ACH=$ACH"
+echo "VANILLA_ACH=$VANILLA_ACH"
 echo "CUSTOM_IN_ACHIEVEMENTS_DAT=$custom_result"
 echo "CUSTOM_IN_ACHIEVEMENTS_MODDED_DAT=$custom_modded_result"
 echo "--- factorio log evidence ---"
