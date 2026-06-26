@@ -25,12 +25,12 @@ def executable_for(app: Path) -> Path:
     return executable
 
 
-def snapshot_saves(save_dir: Path) -> dict[str, tuple[int, int]]:
+def snapshot_save_zips(save_dir: Path) -> dict[str, tuple[int, int]]:
     if not save_dir.exists():
         return {}
     snapshot = {}
     for path in sorted(save_dir.iterdir()):
-        if path.is_file():
+        if path.is_file() and path.suffix == ".zip":
             stat = path.stat()
             snapshot[path.name] = (stat.st_size, stat.st_mtime_ns)
     return snapshot
@@ -81,22 +81,23 @@ def main() -> int:
     patched_exe = executable_for(args.patched_app.expanduser().resolve())
     save_dir = args.save_dir.expanduser().resolve()
 
-    before = snapshot_saves(save_dir)
+    before = snapshot_save_zips(save_dir)
     with tempfile.TemporaryDirectory(prefix="fae-write-data-check.") as temp:
         temp_dir = Path(temp)
         source_read, source_write = run_preview("source", source_exe, temp_dir)
         patched_read, patched_write = run_preview("patched", patched_exe, temp_dir)
-    after = snapshot_saves(save_dir)
+    after = snapshot_save_zips(save_dir)
 
     if before != after:
-        raise SystemExit(f"normal save directory changed during verification: {save_dir}")
+        raise SystemExit(f"normal save ZIP files changed during verification: {save_dir}")
     if source_write != patched_write:
         raise SystemExit(f"write-data mismatch:\nsource:  {source_write}\npatched: {patched_write}")
 
     print(f"source read-data:  {source_read}")
     print(f"patched read-data: {patched_read}")
     print(f"shared write-data: {source_write}")
-    print(f"normal saves unchanged: {save_dir}")
+    print(f"normal save ZIPs unchanged: {save_dir}")
+    print("note: Steam may update steam_autocloud.vdf metadata in the saves directory.")
     return 0
 
 

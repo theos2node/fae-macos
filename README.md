@@ -61,7 +61,7 @@ Verify that the installed patched copy contains every expected ARM64 replacement
 scripts/verify-patched-app
 ```
 
-Verify that the copied app uses the same default write-data path as the Steam app and that the normal saves directory is unchanged by the check:
+Verify that the copied app uses the same default write-data path as the Steam app and that the normal save ZIPs are unchanged by the check:
 
 ```sh
 scripts/verify-default-write-data
@@ -71,10 +71,10 @@ On the tested machine, the patched copy resolved:
 
 ```text
 shared write-data: /Users/theo_primary/Library/Application Support/factorio
-normal saves unchanged: /Users/theo_primary/Library/Application Support/factorio/saves
+normal save ZIPs unchanged: /Users/theo_primary/Library/Application Support/factorio/saves
 ```
 
-This means the duplicate app shares the normal Factorio progress/config location by default. The smoke test still uses an isolated temp write-data directory so it never needs the user's real saves.
+This means the duplicate app shares the normal Factorio progress/config location by default. Steam may update `steam_autocloud.vdf` metadata in the saves directory during normal startup; the verifier checks that the actual `.zip` saves are unchanged. The smoke test still uses an isolated temp write-data directory so it never needs the user's real saves.
 
 ## Why Not `DYLD_INSERT_LIBRARIES`?
 
@@ -99,7 +99,7 @@ The automated tests prove:
 
 - the patched app launches and runs the supported Factorio build;
 - the copied app uses the same default write-data directory as the Steam app;
-- the normal save directory is not changed by verification;
+- the normal save ZIP files are not changed by verification;
 - a throwaway modded save can be created under `/tmp`;
 - all expected original bytes and patched replacement bytes are present at the known ARM64 offsets.
 
