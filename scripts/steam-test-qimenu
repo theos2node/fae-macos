@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SOURCE_APP="${FACTORIO_SOURCE_APP:-${HOME}/Library/Application Support/Steam/steamapps/common/Factorio/factorio.app}"
+HOLD_APP="${SOURCE_APP}.fae-original"
+REMOTE="${FACTORIO_STEAM_REMOTE:-${HOME}/Library/Application Support/Steam/userdata/893251908/427520/remote}"
+PLAYER_DATA="${REMOTE}/player-data.json"
+NORMAL_SAVE_DIR="${HOME}/Library/Application Support/factorio/saves"
+WORK_DIR="${FAE_TEST_DIR:-$(mktemp -d /tmp/fae-qimenu-steam.XXXXXX)}"
+PATCHED_APP="${WORK_DIR}/factorio-patched.app"
+WRITE_DATA="${WORK_DIR}/write-data"
+MOD_DIR="${WORK_DIR}/mods"
+CONFIG="${WORK_DIR}/config.ini"
+SAVE="${WRITE_DATA}/saves/fae-qimenu-steam.zip"
+REMOTE_BACKUP="${WORK_DIR}/remote-backup"
+ACH="fae-qimenu-steam-test-$(date +%s)"
+RESTORE_LOG="${WORK_DIR}/restore.log"
+
+restore() {
+  set +e
+  pkill -f "fae-qimenu-steam|${WORK_DIR}|fae_qimenu_achievement_test" 2>/dev/null || true
+  sleep 1
+  if [[ -L "$SOURCE_APP" ]]; then
+    rm "$SOURCE_APP" >>"$RESTORE_LOG" 2>&1
+  fi
+  if [[ -d "$HOLD_APP" && ! -e "$SOURCE_APP" ]]; then
+    mv "$HOLD_APP" "$SOURCE_APP" >>"$RESTORE_LOG" 2>&1
+  fi
+  if [[ -d "$REMOTE_BACKUP" ]]; then
+    rm -rf "$REMOTE" >>"$RESTORE_LOG" 2>&1
+    mkdir -p "$(dirname "$REMOTE")" >>"$RESTORE_LOG" 2>&1
+    cp -pR "$REMOTE_BACKUP" "$REMOTE" >>"$RESTORE_LOG" 2>&1
+  fi
+}
+
+trap restore EXIT INT TERM
+
+if pgrep -x factorio >/dev/null 2>&1; then
+  echo "steam-test-qimenu: Factorio is already running. Quit it before testing." >&2
+  exit 1
+fi
+
+if [[ ! -d "$SOURCE_APP" || -L "$SOURCE_APP" ]]; then
+  echo "steam-test-qimenu: unexpected Steam Factorio app path: $SOURCE_APP" >&2
+  exit 1
+fi
+
+if [[ -e "$HOLD_APP" ]]; then
+  echo "steam-test-qimenu: restore marker already exists: $HOLD_APP" >&2
+  exit 1
+fi
+
+if [[ ! -f "$PLAYER_DATA" ]]; then
+  echo "steam-test-qimenu: missing Steam Cloud player-data.json: $PLAYER_DATA" >&2
+  exit 1
+fi
+
+mkdir -p "$WRITE_DATA/saves" "$MOD_DIR/fae_qimenu_achievement_test_0.1.0"
+cp -pR "$REMOTE" "$REMOTE_BACKUP"
+/usr/bin/find "$NORMAL_SAVE_DIR" -maxdepth 1 -name "*.zip" -type f -exec stat -f "%N %z %m" {} \; | sort > "$WORK_DIR/save-zips-before.txt"
+
+python3 - "$PLAYER_DATA" "$MOD_DIR/qiMenu_0.2.91.zip" <<'PY'
+import json
+import pathlib
+import subprocess
+import sys
+import urllib.parse
+
+player_data = pathlib.Path(sys.argv[1])
+output = pathlib.Path(sys.argv[2])
+data = json.load(player_data.open())
+url = "https://mods.factorio.com/download/qiMenu/678eccd7229939d0373f6f86?" + urllib.parse.urlencode(
+    {"username": data["service-username"], "token": data["service-token"]}
+)
+subprocess.run(["curl", "-fsSL", url, "-o", str(output)], check=True)
+PY
+
+"$ROOT_DIR/scripts/patch-factorio-app" --output-app "$PATCHED_APP" --force >"$WORK_DIR/patch.log" 2>&1
+
+cat > "$CONFIG" <<EOF_CONFIG
+[path]
+read-data=__PATH__system-read-data__
+write-data=${WRITE_DATA}
+
+[general]
+locale=auto
+EOF_CONFIG
+
+cat > "$MOD_DIR/fae_qimenu_achievement_test_0.1.0/info.json" <<'EOF_INFO'
+{"name":"fae_qimenu_achievement_test","version":"0.1.0","title":"FAE qiMenu Achievement Test","author":"FAE","factorio_version":"2.0","dependencies":["base >= 2.0", "qiMenu >= 0.2.91"]}
+EOF_INFO
+
+cat > "$MOD_DIR/fae_qimenu_achievement_test_0.1.0/data.lua" <<EOF_DATA
+data:extend({{type="achievement", name="$ACH", order="z[$ACH]", icon="__base__/graphics/achievement/so-long-and-thanks-for-all-the-fish.png", icon_size=128}})
+EOF_DATA
+
+cat > "$MOD_DIR/fae_qimenu_achievement_test_0.1.0/control.lua" <<EOF_CTRL
+local function record(line)
+  helpers.write_file("fae-qimenu-steam-test.txt", line .. "\\n", true)
+  log("FAE qiMenu steam test: " .. line)
+end
+script.on_init(function()
+  storage.did_unlock = false
+  record("on_init players=" .. tostring(#game.players))
+end)
+script.on_event(defines.events.on_tick, function(event)
+  if storage.did_unlock or event.tick > 600 then return end
+  if event.tick % 60 == 0 then record("on_tick=" .. tostring(event.tick) .. " players=" .. tostring(#game.players)) end
+  if game.players[1] then
+    local ok, err = pcall(function() game.players[1].unlock_achievement("$ACH") end)
+    storage.did_unlock = true
+    record("custom_unlock=" .. tostring(ok) .. " err=" .. tostring(err))
+  end
+end)
+EOF_CTRL
+
+cat > "$MOD_DIR/mod-list.json" <<'EOF_MODS'
+{"mods":[{"name":"base","enabled":true},{"name":"qiMenu","enabled":true},{"name":"fae_qimenu_achievement_test","enabled":true}]}
+EOF_MODS
+
+"$PATCHED_APP/Contents/MacOS/factorio" --config "$CONFIG" --mod-directory "$MOD_DIR" --create "$SAVE" --map-gen-seed 1 --disable-audio --no-log-rotation >"$WORK_DIR/create.log" 2>&1
+
+mv "$SOURCE_APP" "$HOLD_APP"
+ln -s "$PATCHED_APP" "$SOURCE_APP"
+"$PATCHED_APP/Contents/MacOS/factorio" --config "$CONFIG" --mod-directory "$MOD_DIR" --load-game "$SAVE" --window-size 800x600 --disable-audio --no-log-rotation >"$WORK_DIR/restart-request.log" 2>&1 || true
+
+for _ in {1..200}; do
+  if [[ -f "$WRITE_DATA/script-output/fae-qimenu-steam-test.txt" ]] && grep -q "^custom_unlock=" "$WRITE_DATA/script-output/fae-qimenu-steam-test.txt"; then
+    break
+  fi
+  sleep 0.25
+done
+
+/usr/bin/find "$NORMAL_SAVE_DIR" -maxdepth 1 -name "*.zip" -type f -exec stat -f "%N %z %m" {} \; | sort > "$WORK_DIR/save-zips-after.txt"
+cp "$WRITE_DATA/factorio-current.log" "$WORK_DIR/factorio-current-before-restore.log" 2>/dev/null || true
+cp "$WRITE_DATA/script-output/fae-qimenu-steam-test.txt" "$WORK_DIR/fae-qimenu-steam-test-output.txt" 2>/dev/null || true
+
+custom_result="$(grep -a -q "$ACH" "$REMOTE/achievements.dat" && echo yes || echo no)"
+custom_modded_result="$(grep -a -q "$ACH" "$REMOTE/achievements-modded.dat" && echo yes || echo no)"
+
+restore
+trap - EXIT
+
+echo "ACH=$ACH"
+echo "CUSTOM_IN_ACHIEVEMENTS_DAT=$custom_result"
+echo "CUSTOM_IN_ACHIEVEMENTS_MODDED_DAT=$custom_modded_result"
+echo "--- factorio log evidence ---"
+grep -E "Program arguments|Read data path|Write data path|Binaries path|Initializing Steam API|Steam requires game restart|Loading mod qiMenu|Loading mod fae_qimenu_achievement_test|FAE qiMenu steam test|Factorio initialised|Goodbye" "$WORK_DIR/factorio-current-before-restore.log" | sed -n "1,160p" || true
+echo "--- script output ---"
+sed -n "1,80p" "$WORK_DIR/fae-qimenu-steam-test-output.txt" || true
+echo "--- save zip diff ---"
+diff -u "$WORK_DIR/save-zips-before.txt" "$WORK_DIR/save-zips-after.txt" || true
+echo "--- app restored ---"
+if [[ -d "$SOURCE_APP" && ! -L "$SOURCE_APP" && ! -e "$HOLD_APP" ]]; then
+  echo "yes"
+else
+  ls -ld "$SOURCE_APP" "$HOLD_APP" 2>/dev/null || true
+fi
+echo "WORK_DIR=$WORK_DIR"

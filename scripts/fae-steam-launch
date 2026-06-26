@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+STEAM_APP="${FACTORIO_SOURCE_APP:-${HOME}/Library/Application Support/Steam/steamapps/common/Factorio/factorio.app}"
+PATCHED_APP="${FACTORIO_APP:-${HOME}/Library/Application Support/fae-macos/factorio-patched.app}"
+HOLD_APP="${STEAM_APP}.fae-original"
+PATCHED_BIN="${PATCHED_APP}/Contents/MacOS/factorio"
+
+restore() {
+  set +e
+  if [[ -L "$STEAM_APP" ]]; then
+    rm "$STEAM_APP"
+  fi
+  if [[ -d "$HOLD_APP" && ! -e "$STEAM_APP" ]]; then
+    mv "$HOLD_APP" "$STEAM_APP"
+  fi
+}
+
+if [[ ! -x "$PATCHED_BIN" ]]; then
+  echo "fae-steam-launch: missing patched Factorio executable: $PATCHED_BIN" >&2
+  echo "Run: scripts/patch-factorio-app --force" >&2
+  exit 1
+fi
+
+if pgrep -x factorio >/dev/null 2>&1; then
+  echo "fae-steam-launch: Factorio is already running. Quit it before launching through FAE." >&2
+  exit 1
+fi
+
+if [[ -e "$HOLD_APP" ]]; then
+  echo "fae-steam-launch: restore marker already exists: $HOLD_APP" >&2
+  echo "If Factorio is not running, restore manually with:" >&2
+  echo "  rm -f '$STEAM_APP' && mv '$HOLD_APP' '$STEAM_APP'" >&2
+  exit 1
+fi
+
+if [[ ! -d "$STEAM_APP" || -L "$STEAM_APP" ]]; then
+  echo "fae-steam-launch: unexpected Steam Factorio app path: $STEAM_APP" >&2
+  exit 1
+fi
+
+case "${1:-}" in
+  --version|-h|--help|--create|--generate-map-preview|--benchmark|--dump-data|--dump-icon-sprites|--dump-prototype-locale)
+    exec "$PATCHED_BIN" "$@"
+    ;;
+esac
+
+trap restore EXIT INT TERM
+
+mv "$STEAM_APP" "$HOLD_APP"
+ln -s "$PATCHED_APP" "$STEAM_APP"
+
+set +e
+"$PATCHED_BIN" "$@"
+launch_status=$?
+set -e
+
+for _ in {1..120}; do
+  if pgrep -x factorio >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.5
+done
+
+if ! pgrep -x factorio >/dev/null 2>&1; then
+  exit "$launch_status"
+fi
+
+echo "fae-steam-launch: patched Factorio is running through Steam."
+echo "fae-steam-launch: keep this terminal open; the Steam app path will be restored after Factorio exits."
+
+while pgrep -x factorio >/dev/null 2>&1; do
+  sleep 2
+done
+
+exit "$launch_status"

@@ -33,17 +33,21 @@ Default patched copy:
 
 ## Run
 
-Keep Steam open, then run:
+For normal graphical play with Steam achievements, keep Steam open and run:
 
 ```sh
-scripts/fae-launch
+scripts/fae-steam-launch
 ```
 
 To pass Factorio arguments:
 
 ```sh
-scripts/fae-launch --load-game /path/to/save.zip
+scripts/fae-steam-launch --load-game /path/to/save.zip
 ```
+
+`fae-steam-launch` temporarily makes Steam's Factorio app path point at the patched copy, lets Steam start the patched app, waits while Factorio runs, and restores the original Steam app path when Factorio exits. This is needed because the Steam build restarts graphical launches through Steam.
+
+For headless checks that do not need Steam's graphical restart path, `scripts/fae-launch` directly executes the patched binary.
 
 ## Isolated Smoke Test
 
@@ -76,6 +80,16 @@ normal save ZIPs unchanged: /Users/theo_primary/Library/Application Support/fact
 
 This means the duplicate app shares the normal Factorio progress/config location by default. Steam may update `steam_autocloud.vdf` metadata in the saves directory during normal startup; the verifier checks that the actual `.zip` saves are unchanged. The smoke test still uses an isolated temp write-data directory so it never needs the user's real saves.
 
+Run the Steam-backed `qiMenu` test:
+
+```sh
+scripts/steam-test-qimenu
+```
+
+This downloads `qiMenu 0.2.91` into a temporary mod directory, creates a throwaway save, temporarily points Steam's Factorio app path at a temporary patched app, and restores the original app path and Steam remote achievement files afterward.
+
+The helper achievement used by this test is intentionally custom and non-Steam, so it should not be interpreted as a real Steam unlock. The test proves that Steam relaunches the patched app, `qiMenu` is active, a local player exists in the modded save, and Factorio's achievement API succeeds under that patched runtime.
+
 ## Why Not `DYLD_INSERT_LIBRARIES`?
 
 The tested Factorio build allows dylib loading, but macOS kills the process when execution reaches modified signed text pages. Patching and ad-hoc signing a separate app copy avoids modifying the original app while allowing the patched code to run.
@@ -102,5 +116,6 @@ The automated tests prove:
 - the normal save ZIP files are not changed by verification;
 - a throwaway modded save can be created under `/tmp`;
 - all expected original bytes and patched replacement bytes are present at the known ARM64 offsets.
+- a Steam-backed graphical test with `qiMenu 0.2.91` loaded a modded save through the patched app, created a local player, and successfully called Factorio's achievement API.
 
-They intentionally do not force-unlock a new real Steam achievement, because that would permanently affect the user's Steam account. For normal play, keep Steam open and launch the patched app through the same Steam environment you use for Factorio.
+They intentionally do not force-unlock a new real Steam achievement, because that would permanently affect the user's Steam account. The patch scope covers the modded-save gates in the supported Factorio binary; it cannot prove every possible third-party mod behaves correctly, only that the achievement gate no longer depends on whether mods are active.
