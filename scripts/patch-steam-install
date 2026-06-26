@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+STEAM_APP="${FACTORIO_SOURCE_APP:-${HOME}/Library/Application Support/Steam/steamapps/common/Factorio/factorio.app}"
+BACKUP_APP="${FACTORIO_BACKUP_APP:-${STEAM_APP}.fae-vanilla-backup}"
+
+if pgrep -x factorio >/dev/null 2>&1; then
+  echo "patch-steam-install: Factorio is running. Quit it before patching the Steam install." >&2
+  exit 1
+fi
+
+if [[ -e "$BACKUP_APP" ]]; then
+  echo "patch-steam-install: backup already exists: $BACKUP_APP" >&2
+  echo "Run scripts/restore-steam-install before patching again." >&2
+  exit 1
+fi
+
+if [[ ! -d "$STEAM_APP" || -L "$STEAM_APP" ]]; then
+  echo "patch-steam-install: unexpected Steam Factorio app path: $STEAM_APP" >&2
+  exit 1
+fi
+
+restore_on_failure() {
+  set +e
+  if [[ -d "$BACKUP_APP" && ! -e "$STEAM_APP" ]]; then
+    mv "$BACKUP_APP" "$STEAM_APP"
+  fi
+}
+
+trap restore_on_failure ERR INT TERM
+
+mv "$STEAM_APP" "$BACKUP_APP"
+"$ROOT_DIR/scripts/patch-factorio-app" --source-app "$BACKUP_APP" --output-app "$STEAM_APP" --force
+"$ROOT_DIR/scripts/verify-patched-app" --source-app "$BACKUP_APP" --patched-app "$STEAM_APP"
+
+trap - ERR INT TERM
+echo "patched Steam install: $STEAM_APP"
+echo "vanilla backup: $BACKUP_APP"
+echo "normal Steam Play now uses the patched app. To restore vanilla:"
+echo "  scripts/restore-steam-install"

@@ -4,8 +4,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SOURCE_APP="${FACTORIO_SOURCE_APP:-${HOME}/Library/Application Support/Steam/steamapps/common/Factorio/factorio.app}"
 HOLD_APP="${SOURCE_APP}.fae-original"
-REMOTE="${FACTORIO_STEAM_REMOTE:-${HOME}/Library/Application Support/Steam/userdata/893251908/427520/remote}"
-PLAYER_DATA="${REMOTE}/player-data.json"
 NORMAL_SAVE_DIR="${HOME}/Library/Application Support/factorio/saves"
 WORK_DIR="${FAE_TEST_DIR:-$(mktemp -d /tmp/fae-qimenu-steam.XXXXXX)}"
 PATCHED_APP="${WORK_DIR}/factorio-patched.app"
@@ -17,6 +15,30 @@ REMOTE_BACKUP="${WORK_DIR}/remote-backup"
 ACH="fae-qimenu-steam-test-$(date +%s)"
 VANILLA_ACH="so-long-and-thanks-for-all-the-fish"
 RESTORE_LOG="${WORK_DIR}/restore.log"
+
+detect_remote() {
+  if [[ -n "${FACTORIO_STEAM_REMOTE:-}" ]]; then
+    echo "$FACTORIO_STEAM_REMOTE"
+    return
+  fi
+
+  local matches=()
+  while IFS= read -r path; do
+    matches+=("$(dirname "$path")")
+  done < <(/usr/bin/find "${HOME}/Library/Application Support/Steam/userdata" -path "*/427520/remote/player-data.json" -type f 2>/dev/null)
+
+  if [[ "${#matches[@]}" -eq 1 ]]; then
+    echo "${matches[0]}"
+    return
+  fi
+
+  echo "steam-test-qimenu: could not uniquely find Steam remote player-data.json." >&2
+  echo "Set FACTORIO_STEAM_REMOTE to .../Steam/userdata/<id>/427520/remote." >&2
+  exit 1
+}
+
+REMOTE="$(detect_remote)"
+PLAYER_DATA="${REMOTE}/player-data.json"
 
 restore() {
   set +e

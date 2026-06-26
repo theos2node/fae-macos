@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+STEAM_APP="${FACTORIO_SOURCE_APP:-${HOME}/Library/Application Support/Steam/steamapps/common/Factorio/factorio.app}"
+BACKUP_APP="${FACTORIO_BACKUP_APP:-${STEAM_APP}.fae-vanilla-backup}"
+PATCHED_ARCHIVE="${STEAM_APP}.fae-patched-$(date +%Y%m%d%H%M%S)"
+
+if pgrep -x factorio >/dev/null 2>&1; then
+  echo "restore-steam-install: Factorio is running. Quit it before restoring the Steam install." >&2
+  exit 1
+fi
+
+if [[ ! -d "$BACKUP_APP" ]]; then
+  echo "restore-steam-install: backup not found: $BACKUP_APP" >&2
+  exit 1
+fi
+
+if [[ -e "$STEAM_APP" ]]; then
+  mv "$STEAM_APP" "$PATCHED_ARCHIVE"
+  echo "archived patched app: $PATCHED_ARCHIVE"
+fi
+
+mv "$BACKUP_APP" "$STEAM_APP"
+codesign --verify --deep --strict --verbose=2 "$STEAM_APP" >/dev/null
+
+echo "restored vanilla Steam install: $STEAM_APP"
