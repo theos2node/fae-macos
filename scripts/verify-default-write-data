@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+import argparse
+import re
+import subprocess
+import tempfile
+from pathlib import Path
+
+
+def default_source_app() -> Path:
+    return Path.home() / "Library/Application Support/Steam/steamapps/common/Factorio/factorio.app"
+
+
+def default_patched_app() -> Path:
+    return Path.home() / "Library/Application Support/fae-macos/factorio-patched.app"
+
+
+def default_save_dir() -> Path:
+    return Path.home() / "Library/Application Support/factorio/saves"
+
+
+def executable_for(app: Path) -> Path:
+    executable = app / "Contents" / "MacOS" / "factorio"
+    if not executable.exists():
+        raise SystemExit(f"Factorio executable not found: {executable}")
+    return executable
+
+
+def snapshot_saves(save_dir: Path) -> dict[str, tuple[int, int]]:
+    if not save_dir.exists():
+        return {}
+    snapshot = {}
+    for path in sorted(save_dir.iterdir()):
+        if path.is_file():
+            stat = path.stat()
+            snapshot[path.name] = (stat.st_size, stat.st_mtime_ns)
+    return snapshot
+
+
+def extract_path(label: str, output: str) -> str:
+    match = re.search(rf"{re.escape(label)}:\s+(.+?)(?:\s+\[|$)", output, re.MULTILINE)
+    if not match:
+        raise SystemExit(f"Could not find {label!r} in Factorio output:\n{output}")
+    return match.group(1).strip()
+
+
+def run_preview(name: str, executable: Path, temp_dir: Path) -> tuple[str, str]:
+    preview = temp_dir / f"{name}.png"
+    result = subprocess.run(
+        [
+            str(executable),
+            "--generate-map-preview",
+            str(preview),
+            "--map-preview-size",
+            "64",
+            "--map-gen-seed",
+            "1",
+            "--disable-audio",
+            "--no-log-rotation",
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if result.returncode != 0:
+        raise SystemExit(result.stdout)
+    if not preview.exists():
+        raise SystemExit(f"{name} preview was not created: {preview}")
+    return extract_path("Read data path", result.stdout), extract_path("Write data path", result.stdout)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Verify that the patched app uses the same default Factorio write-data path as the Steam app."
+    )
+    parser.add_argument("--source-app", type=Path, default=default_source_app())
+    parser.add_argument("--patched-app", type=Path, default=default_patched_app())
+    parser.add_argument("--save-dir", type=Path, default=default_save_dir())
+    args = parser.parse_args()
+
+    source_exe = executable_for(args.source_app.expanduser().resolve())
+    patched_exe = executable_for(args.patched_app.expanduser().resolve())
+    save_dir = args.save_dir.expanduser().resolve()
+
+    before = snapshot_saves(save_dir)
+    with tempfile.TemporaryDirectory(prefix="fae-write-data-check.") as temp:
+        temp_dir = Path(temp)
+        source_read, source_write = run_preview("source", source_exe, temp_dir)
+        patched_read, patched_write = run_preview("patched", patched_exe, temp_dir)
+    after = snapshot_saves(save_dir)
+
+    if before != after:
+        raise SystemExit(f"normal save directory changed during verification: {save_dir}")
+    if source_write != patched_write:
+        raise SystemExit(f"write-data mismatch:\nsource:  {source_write}\npatched: {patched_write}")
+
+    print(f"source read-data:  {source_read}")
+    print(f"patched read-data: {patched_read}")
+    print(f"shared write-data: {source_write}")
+    print(f"normal saves unchanged: {save_dir}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

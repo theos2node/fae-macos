@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+import argparse
+import hashlib
+import importlib.machinery
+import importlib.util
+import subprocess
+from pathlib import Path
+
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+
+
+def load_patcher():
+    script = ROOT_DIR / "scripts" / "patch-factorio-app"
+    loader = importlib.machinery.SourceFileLoader("patch_factorio_app", str(script))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+patcher = load_patcher()
+
+
+def executable_for(app: Path) -> Path:
+    executable = app / "Contents" / "MacOS" / "factorio"
+    if not executable.exists():
+        raise SystemExit(f"Factorio executable not found: {executable}")
+    return executable
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def patch_bytes(executable: Path) -> dict[str, bytes]:
+    data = executable.read_bytes()
+    slice_offset, _size = patcher.arm64_slice(data)
+    maps = patcher.segment_maps(data, slice_offset)
+    found = {}
+    for patch in patcher.PATCHES:
+        offset = patcher.file_offset_for(patch["vmaddr"], maps)
+        size = len(patch["expected"])
+        found[patch["name"]] = data[offset : offset + size]
+    return found
+
+
+def check_signature(app: Path) -> str:
+    result = subprocess.run(
+        ["codesign", "--verify", "--deep", "--strict", "--verbose=2", str(app)],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if result.returncode != 0:
+        raise SystemExit(result.stdout.strip())
+    return result.stdout.strip()
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Verify that a copied Factorio app has all FAE macOS patches.")
+    parser.add_argument("--source-app", type=Path, default=patcher.default_source_app())
+    parser.add_argument("--patched-app", type=Path, default=patcher.default_output_app())
+    args = parser.parse_args()
+
+    source_app = args.source_app.expanduser().resolve()
+    patched_app = args.patched_app.expanduser().resolve()
+    source_exe = executable_for(source_app)
+    patched_exe = executable_for(patched_app)
+
+    source_bytes = patch_bytes(source_exe)
+    patched_bytes = patch_bytes(patched_exe)
+
+    for patch in patcher.PATCHES:
+        name = patch["name"]
+        if source_bytes[name] != patch["expected"]:
+            raise SystemExit(
+                f"source mismatch for {name}: expected {patch['expected'].hex(' ')}, "
+                f"found {source_bytes[name].hex(' ')}"
+            )
+        if patched_bytes[name] != patch["replacement"]:
+            raise SystemExit(
+                f"patched mismatch for {name}: expected {patch['replacement'].hex(' ')}, "
+                f"found {patched_bytes[name].hex(' ')}"
+            )
+        print(f"ok: {name}")
+
+    signature = check_signature(patched_app)
+    print(f"source sha256:  {sha256(source_exe)}")
+    print(f"patched sha256: {sha256(patched_exe)}")
+    if signature:
+        print(signature)
+    print(f"verified patched app: {patched_app}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
