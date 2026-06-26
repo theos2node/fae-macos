@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DEFAULT_APP="${HOME}/Library/Application Support/fae-macos/factorio-patched.app"
+FACTORIO_APP="${FACTORIO_APP:-$DEFAULT_APP}"
+FACTORIO_BIN="${FACTORIO_APP}/Contents/MacOS/factorio"
+
+if [[ ! -x "$FACTORIO_BIN" ]]; then
+  echo "fae-launch: missing patched Factorio executable: $FACTORIO_BIN" >&2
+  echo "Run: scripts/patch-factorio-app --force" >&2
+  exit 1
+fi
+
+exec "$FACTORIO_BIN" "$@"

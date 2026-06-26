@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SOURCE_APP="${FACTORIO_SOURCE_APP:-${HOME}/Library/Application Support/Steam/steamapps/common/Factorio/factorio.app}"
+WORK_DIR="${FAE_TEST_DIR:-$(mktemp -d /tmp/fae-macos.XXXXXX)}"
+WRITE_DATA="${WORK_DIR}/write-data"
+MOD_DIR="${WORK_DIR}/mods"
+CONFIG="${WORK_DIR}/config.ini"
+SAVE="${WRITE_DATA}/saves/fae-test.zip"
+PATCHED_APP="${WORK_DIR}/factorio-patched.app"
+
+mkdir -p "$WRITE_DATA/saves" "$MOD_DIR/fae_test_mod_0.1.0"
+
+cat > "$CONFIG" <<EOF_CONFIG
+[path]
+read-data=__PATH__system-read-data__
+write-data=${WRITE_DATA}
+
+[general]
+locale=auto
+EOF_CONFIG
+
+cat > "$MOD_DIR/fae_test_mod_0.1.0/info.json" <<'EOF_INFO'
+{
+  "name": "fae_test_mod",
+  "version": "0.1.0",
+  "title": "FAE macOS Smoke Test Mod",
+  "author": "FAE macOS",
+  "factorio_version": "2.0"
+}
+EOF_INFO
+
+cat > "$MOD_DIR/fae_test_mod_0.1.0/data.lua" <<'EOF_DATA'
+-- Intentionally empty: this mod only marks the save as modded for smoke tests.
+EOF_DATA
+
+cat > "$MOD_DIR/mod-list.json" <<'EOF_MODS'
+{
+  "mods": [
+    {"name": "base", "enabled": true},
+    {"name": "fae_test_mod", "enabled": true}
+  ]
+}
+EOF_MODS
+
+echo "FAE smoke test data: $WORK_DIR"
+"$ROOT_DIR/scripts/patch-factorio-app" --source-app "$SOURCE_APP" --output-app "$PATCHED_APP" --force
+FACTORIO_APP="$PATCHED_APP" "$ROOT_DIR/scripts/fae-launch" --config "$CONFIG" --mod-directory "$MOD_DIR" --create "$SAVE" --map-gen-seed 1 --disable-audio --no-log-rotation
+test -f "$SAVE"
+echo "Created isolated modded test save: $SAVE"

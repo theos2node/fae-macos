@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+import argparse
+import os
+import shutil
+import struct
+import subprocess
+import sys
+from pathlib import Path
+
+CPU_TYPE_ARM64 = 0x0100000C
+LC_SEGMENT_64 = 0x19
+
+PATCHES = [
+    {
+        "name": "AchievementStats::allowed associated-context gate",
+        "vmaddr": 0x100185ABC,
+        "expected": bytes.fromhex("e9 fd ff b5"),
+        "replacement": bytes.fromhex("1f 20 03 d5"),
+    },
+    {
+        "name": "SteamContext::setStat mod gate",
+        "vmaddr": 0x10198CF5C,
+        "expected": bytes.fromhex("0e 00 00 14"),
+        "replacement": bytes.fromhex("f6 ff ff 17"),
+    },
+    {
+        "name": "SteamContext::unlockAchievement mod gate",
+        "vmaddr": 0x10198D00C,
+        "expected": bytes.fromhex("14 00 00 14"),
+        "replacement": bytes.fromhex("f6 ff ff 17"),
+    },
+    {
+        "name": "SteamContextInterface::sync local achievements mod gate",
+        "vmaddr": 0x10198DE94,
+        "expected": bytes.fromhex("d9 ff ff 17"),
+        "replacement": bytes.fromhex("ea ff ff 17"),
+    },
+    {
+        "name": "AchievementGui::updateModdedLabel mod gate",
+        "vmaddr": 0x100BD47B4,
+        "expected": bytes.fromhex("ff ff 00 a9"),
+        "replacement": bytes.fromhex("f6 ff ff 17"),
+    },
+    {
+        "name": "PlayerData::PlayerData achievement filename",
+        "vmaddr": 0x100346BA8,
+        "expected": bytes.fromhex("b5 06 06 91"),
+        "replacement": bytes.fromhex("f5 03 0a aa"),
+    },
+    {
+        "name": "PlayerData::PlayerData modded-achievement flag",
+        "vmaddr": 0x100346D04,
+        "expected": bytes.fromhex("29 00 80 52"),
+        "replacement": bytes.fromhex("09 00 80 52"),
+    },
+]
+
+
+def default_source_app() -> Path:
+    return Path.home() / "Library/Application Support/Steam/steamapps/common/Factorio/factorio.app"
+
+
+def default_output_app() -> Path:
+    return Path.home() / "Library/Application Support/fae-macos/factorio-patched.app"
+
+
+def run(cmd: list[str]) -> None:
+    subprocess.run(cmd, check=True)
+
+
+def clone_app(source: Path, output: Path, force: bool) -> None:
+    if output.exists():
+        if not force:
+            raise SystemExit(f"Output app already exists: {output}\nUse --force to replace it.")
+        shutil.rmtree(output)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    run(["cp", "-cR", str(source), str(output)])
+
+
+def arm64_slice(data: bytes) -> tuple[int, int]:
+    magic = struct.unpack_from(">I", data, 0)[0]
+    if magic == 0xCAFEBABE:
+        nfat = struct.unpack_from(">I", data, 4)[0]
+        off = 8
+        for _ in range(nfat):
+            cputype, _cpusubtype, offset, size, _align = struct.unpack_from(">IIIII", data, off)
+            if cputype == CPU_TYPE_ARM64:
+                return offset, size
+            off += 20
+        raise SystemExit("No arm64 slice found in Factorio executable.")
+
+    if struct.unpack_from("<I", data, 0)[0] == 0xFEEDFACF:
+        return 0, len(data)
+
+    raise SystemExit("Unsupported Mach-O file.")
+
+
+def segment_maps(data: bytes, slice_offset: int) -> list[tuple[int, int, int, int, str]]:
+    header = struct.unpack_from("<IiiIIII", data, slice_offset)
+    magic, _cputype, _cpusubtype, _filetype, ncmds, _sizeofcmds, _flags = header
+    if magic != 0xFEEDFACF:
+        raise SystemExit("arm64 slice is not Mach-O 64-bit.")
+
+    commands = slice_offset + 32
+    maps: list[tuple[int, int, int, int, str]] = []
+    for _ in range(ncmds):
+        cmd, cmdsize = struct.unpack_from("<II", data, commands)
+        if cmd == LC_SEGMENT_64:
+            raw = struct.unpack_from("<II16sQQQQIIII", data, commands)
+            segname = raw[2].split(b"\0", 1)[0].decode("ascii", "replace")
+            vmaddr, vmsize, fileoff, filesize = raw[3], raw[4], raw[5], raw[6]
+            maps.append((vmaddr, vmsize, slice_offset + fileoff, filesize, segname))
+        commands += cmdsize
+    return maps
+
+
+def file_offset_for(vmaddr: int, maps: list[tuple[int, int, int, int, str]]) -> int:
+    for base, vmsize, fileoff, filesize, _name in maps:
+        if base <= vmaddr < base + vmsize:
+            delta = vmaddr - base
+            if delta >= filesize:
+                raise SystemExit(f"Address 0x{vmaddr:x} is outside file-backed segment data.")
+            return fileoff + delta
+    raise SystemExit(f"Address 0x{vmaddr:x} not found in Mach-O segments.")
+
+
+def patch_executable(executable: Path) -> None:
+    data = bytearray(executable.read_bytes())
+    slice_offset, _size = arm64_slice(data)
+    maps = segment_maps(data, slice_offset)
+
+    for patch in PATCHES:
+        offset = file_offset_for(patch["vmaddr"], maps)
+        found = bytes(data[offset : offset + len(patch["expected"])])
+        if found != patch["expected"]:
+            raise SystemExit(
+                f"{patch['name']} mismatch at file offset 0x{offset:x}: "
+                f"expected {patch['expected'].hex(' ')}, found {found.hex(' ')}"
+            )
+        data[offset : offset + len(patch["replacement"])] = patch["replacement"]
+        print(f"patched {patch['name']} at file offset 0x{offset:x}")
+
+    executable.write_bytes(data)
+
+
+def sign_app(app: Path) -> None:
+    run(["codesign", "--force", "--deep", "--sign", "-", str(app)])
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Patch a copy of native macOS Factorio for modded achievements.")
+    parser.add_argument("--source-app", type=Path, default=default_source_app())
+    parser.add_argument("--output-app", type=Path, default=default_output_app())
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--no-sign", action="store_true")
+    args = parser.parse_args()
+
+    source = args.source_app.expanduser().resolve()
+    output = args.output_app.expanduser()
+    if not source.exists():
+        raise SystemExit(f"Source app not found: {source}")
+
+    clone_app(source, output, args.force)
+    executable = output / "Contents/MacOS/factorio"
+    patch_executable(executable)
+    if not args.no_sign:
+        sign_app(output)
+    print(f"patched app: {output}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
